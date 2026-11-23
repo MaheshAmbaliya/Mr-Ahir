@@ -1,6 +1,6 @@
 {
-  "name": "PlusTV",
-  "description": "Live TV M3U playlist player powered by Media3 ExoPlayer with DASH, HLS, ClearKey DRM, custom headers, favorites, and dark/light themes.",
+  "name": "MiniTV",
+  "description": "MiniTV live TV M3U playlist player powered by Media3 ExoPlayer with fast zero-stall adaptive streaming, DASH, HLS, ClearKey DRM, custom headers, favorites, and dark/light themes.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

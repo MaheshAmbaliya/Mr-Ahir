@@ -1,6 +1,6 @@
 <resources>
-    <string name="app_name">PlusTV</string>
-    <string name="brand_wordmark">+ PLUSTV</string>
+    <string name="app_name">MiniTV</string>
+    <string name="brand_wordmark">MiniTV</string>
     <string name="live_streaming_now">Live Streaming Now</string>
     <string name="favorite_channels">Favorite Channels</string>
     <string name="favorites_title">Favorites</string>
@@ -43,4 +43,29 @@
     <string name="loading_channels">Loading live channels…</string>
     <string name="action_refresh_token">Refresh Token</string>
     <string name="refreshing_stream_token">Refreshing playlist token…</string>
+    <string name="buffering_label">Buffering…</string>
+    <string name="go_live">GO LIVE</string>
+    <string name="tracks_sheet_title">Stream Quality &amp; Audio</string>
+    <string name="video_quality_section">Video Quality</string>
+    <string name="audio_tracks_section">Audio Tracks</string>
+    <string name="auto_quality">Auto (Adaptive)</string>
+    <string name="auto_audio">Auto (Default)</string>
+    <string name="decoder_badge_prefer">HW+ Prefer</string>
+    <string name="decoder_badge_sw">SW Decode</string>
+    <string name="decoder_badge_auto">HW Auto</string>
+    <string name="decoder_pill_prefer">Decoder: Prefer</string>
+    <string name="decoder_pill_sw">Decoder: SW</string>
+    <string name="decoder_pill_auto">Decoder: Auto</string>
+    <string name="tracks_pill_format">Tracks (%1$dA / %2$dV)</string>
+    <string name="ratio_pill_format">Ratio: %1$s</string>
+    <string name="initializing_stream">Initializing stream…</string>
+    <string name="cd_previous_channel">Previous channel</string>
+    <string name="cd_next_channel">Next channel</string>
+    <string name="cd_play">Play</string>
+    <string name="cd_pause">Pause</string>
+    <string name="cd_mute">Mute audio</string>
+    <string name="cd_unmute">Unmute audio</string>
+    <string name="cd_tracks_settings">Video quality and audio track settings</string>
+    <string name="cd_fullscreen">Enter fullscreen</string>
+    <string name="cd_exit_fullscreen">Exit fullscreen</string>
 </resources>

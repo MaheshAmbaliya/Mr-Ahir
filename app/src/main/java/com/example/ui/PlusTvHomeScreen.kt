@@ -108,7 +108,7 @@ fun PlusTvHomeScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // + PLUSTV Top Bar
+        // MiniTV Top Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()

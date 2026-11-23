@@ -4,16 +4,18 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Vertical cyan bar centered within the 66dp safe zone (21..87) -->
+    <!-- Sleek MiniTV rounded screen frame inside 66dp safe zone (24..84) -->
     <path
-        android:fillColor="#00D2FF"
-        android:pathData="M51,28h6c1.66,0 3,1.34 3,3v46c0,1.66 -1.34,3 -3,3h-6c-1.66,0 -3,-1.34 -3,-3V31c0,-1.66 1.34,-3 3,-3z" />
-    <!-- Horizontal magenta bar centered within the 66dp safe zone -->
+        android:fillColor="#00000000"
+        android:strokeColor="#00D2FF"
+        android:strokeWidth="5"
+        android:pathData="M34,32 L74,32 A8,8 0 0 1 82,40 L82,66 A8,8 0 0 1 74,74 L34,74 A8,8 0 0 1 26,66 L26,40 A8,8 0 0 1 34,32 Z" />
+    <!-- Vibrant neon pink Play triangle centered inside TV screen -->
     <path
         android:fillColor="#EC4899"
-        android:pathData="M31,48h46c1.66,0 3,1.34 3,3v6c0,1.66 -1.34,3 -3,3H31c-1.66,0 -3,-1.34 -3,-3v-6c0,-1.66 1.34,-3 3,-3z" />
-    <!-- Center vibrant violet intersection glow -->
+        android:pathData="M47,43 L66,53 L47,63 Z" />
+    <!-- Minimal TV stand base -->
     <path
         android:fillColor="#A855F7"
-        android:pathData="M48,48h12v12h-12z" />
+        android:pathData="M43,79 L65,79 A2,2 0 0 1 67,81 A2,2 0 0 1 65,83 L43,83 A2,2 0 0 1 41,81 A2,2 0 0 1 43,79 Z" />
 </vector>

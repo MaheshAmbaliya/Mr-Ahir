@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "PlusTV"
+rootProject.name = "MiniTV"
 
 include(":app")

@@ -30,7 +30,7 @@ object M3uParser {
             connectTimeout = 15_000
             readTimeout = 20_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) PlusTV/1.0")
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) MiniTV/1.0")
             setRequestProperty("Accept", "*/*")
         }
         return try {

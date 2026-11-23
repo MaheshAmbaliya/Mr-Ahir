@@ -1,18 +1,15 @@
 package com.example.ui
 
 import android.app.Activity
-import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
-import android.util.Rational
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,31 +25,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.PictureInPictureAlt
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ScreenRotation
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -62,15 +51,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -79,10 +65,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -99,10 +89,12 @@ import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
 import androidx.media3.exoplayer.drm.LocalMediaDrmCallback
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.M3uParser
 import com.example.data.TvChannel
@@ -110,17 +102,10 @@ import com.example.ui.theme.CyanGlow
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkOnSurfaceMuted
 import com.example.ui.theme.DarkOutline
-import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.DarkTileStage
 import com.example.ui.theme.ErrorSoft
-import com.example.ui.theme.PlusTvBrandGradient
-import com.example.ui.theme.StarGold
+import kotlinx.coroutines.delay
+import java.util.Locale
 
-/**
- * Wraps an HttpDataSource so every manifest, sub-playlist, and media segment request
- * carries the channel's __hdnea__ query auth token (when present) in addition to Cookie headers.
- * Many IPTV/Akamai CDNs validate __hdnea__ on child .m4s/.ts segments, not just the initial manifest.
- */
 @UnstableApi
 private class AuthTokenDataSource(
     private val upstream: HttpDataSource,
@@ -177,11 +162,11 @@ private fun buildReadableErrorMessage(
         val headline = "HTTP $code (${httpInvalid.responseMessage ?: error.errorCodeName})"
         val hint = when (code) {
             403, 451 -> if (isJioCdn) {
-                "Stream blocked (HTTP $code). JioTV streams require an Indian network IP (cloud emulators run outside India) or a fresh playlist token."
+                "Stream blocked (HTTP $code). JioTV streams require an Indian network IP or a fresh playlist token."
             } else {
                 "Access denied (HTTP $code). The stream may be geo-restricted or its auth token expired."
             }
-            401 -> "Unauthorized (HTTP 401). The channel token may have expired — tap Refresh Token."
+            401 -> "Unauthorized (HTTP 401). Tap Refresh Token to fetch a fresh stream key."
             404, 410 -> "Stream offline or moved (HTTP $code). Try refreshing the playlist."
             else -> "Server returned HTTP $code. Try refreshing the playlist or retrying."
         }
@@ -197,6 +182,104 @@ private fun buildReadableErrorMessage(
 
     return "Playback Error (${error.errorCodeName})" to
         (rootCause.message ?: error.message ?: "Stream unavailable")
+}
+
+private fun formatAudioCodec(mime: String?): String = when {
+    mime == null -> ""
+    mime.contains("mp4a", ignoreCase = true) || mime.contains("aac", ignoreCase = true) -> "AAC"
+    mime.contains("eac3", ignoreCase = true) -> "EAC3"
+    mime.contains("ac3", ignoreCase = true) -> "AC3"
+    mime.contains("opus", ignoreCase = true) -> "Opus"
+    mime.contains("mpeg", ignoreCase = true) -> "MP3"
+    else -> mime.substringAfter('/').uppercase(Locale.US)
+}
+
+private fun formatChannelLayout(channelCount: Int): String = when (channelCount) {
+    1 -> "Mono"
+    2 -> "Stereo"
+    6 -> "5.1"
+    8 -> "7.1"
+    in 3..Int.MAX_VALUE -> "${channelCount}ch"
+    else -> ""
+}
+
+private fun formatSampleRate(sampleRate: Int): String {
+    if (sampleRate <= 0) return ""
+    val khz = sampleRate / 1000.0
+    return if (sampleRate % 1000 == 0) {
+        "${sampleRate / 1000}kHz"
+    } else {
+        String.format(Locale.US, "%.1fkHz", khz)
+    }
+}
+
+private fun extractTrackLists(tracks: Tracks): Pair<List<VideoTrackOption>, List<AudioTrackOption>> {
+    val videos = mutableListOf<VideoTrackOption>()
+    val audios = mutableListOf<AudioTrackOption>()
+
+    tracks.groups.forEachIndexed { groupIdx, group ->
+        when (group.type) {
+            C.TRACK_TYPE_VIDEO -> {
+                for (trackIdx in 0 until group.length) {
+                    if (!group.isTrackSupported(trackIdx)) continue
+                    val fmt = group.getTrackFormat(trackIdx)
+                    val label = if (fmt.height > 0) "${fmt.height}p" else "Video ${videos.size + 1}"
+                    val detailParts = buildList {
+                        if (fmt.width > 0 && fmt.height > 0) add("${fmt.width}×${fmt.height}")
+                        if (fmt.bitrate > 0) {
+                            add(String.format(Locale.US, "%.1f Mbps", fmt.bitrate / 1_000_000f))
+                        }
+                        if (fmt.frameRate > 0f) add("${fmt.frameRate.toInt()} fps")
+                    }
+                    videos.add(
+                        VideoTrackOption(
+                            id = "v-$groupIdx-$trackIdx",
+                            label = label,
+                            detail = detailParts.joinToString(" • "),
+                            groupIndex = groupIdx,
+                            trackIndex = trackIdx,
+                            isSelected = group.isTrackSelected(trackIdx)
+                        )
+                    )
+                }
+            }
+
+            C.TRACK_TYPE_AUDIO -> {
+                for (trackIdx in 0 until group.length) {
+                    if (!group.isTrackSupported(trackIdx)) continue
+                    val fmt = group.getTrackFormat(trackIdx)
+                    val lang = fmt.language?.takeIf { it.isNotBlank() && it != "und" }
+                        ?.let { Locale(it).displayLanguage.replaceFirstChar(Char::uppercase) }
+                    val label = fmt.label?.takeIf { it.isNotBlank() }
+                        ?: lang
+                        ?: "Audio ${audios.size + 1}"
+                    val detailParts = buildList {
+                        val codec = formatAudioCodec(fmt.sampleMimeType)
+                        if (codec.isNotEmpty()) add(codec)
+                        val layout = formatChannelLayout(fmt.channelCount)
+                        if (layout.isNotEmpty()) add(layout)
+                        val sr = formatSampleRate(fmt.sampleRate)
+                        if (sr.isNotEmpty()) add(sr)
+                    }
+                    audios.add(
+                        AudioTrackOption(
+                            id = "a-$groupIdx-$trackIdx",
+                            label = label,
+                            detail = detailParts.joinToString(" • "),
+                            groupIndex = groupIdx,
+                            trackIndex = trackIdx,
+                            isSelected = group.isTrackSelected(trackIdx)
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    val sortedVideos = videos.sortedByDescending { opt ->
+        opt.label.removeSuffix("p").toIntOrNull() ?: 0
+    }
+    return sortedVideos to audios
 }
 
 @OptIn(UnstableApi::class)
@@ -216,13 +299,62 @@ fun PlayerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    var ratioToastText by remember { mutableStateOf<String?>(null) }
+    var ratioToastTick by remember { mutableIntStateOf(0) }
     var isLandscape by remember { mutableStateOf(false) }
+    var isMuted by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(true) }
+    var isBuffering by remember(channel.id) { mutableStateOf(true) }
+    var showBufferingUi by remember(channel.id) { mutableStateOf(true) }
+    var showControls by remember(channel.id) { mutableStateOf(true) }
+    var controlsTouchTick by remember { mutableIntStateOf(0) }
+    var showTracksSheet by remember { mutableStateOf(false) }
+
+    var compatMode by remember(channel.id, channel.streamUrl) { mutableIntStateOf(0) }
+    var reloadKey by remember { mutableIntStateOf(0) }
+
     var errorHeadline by remember { mutableStateOf<String?>(null) }
     var errorHint by remember { mutableStateOf<String?>(null) }
-    var reloadKey by remember { mutableIntStateOf(0) }
-    // Mode 0: Enhanced headers + segment __hdnea__ propagation.
-    // Mode 1: Strict raw playlist URL/headers fallback (auto-triggered on HTTP 400/403).
-    var compatMode by remember(channel.id, channel.streamUrl) { mutableIntStateOf(0) }
+
+    var telemetry by remember(channel.id) { mutableStateOf(StreamTelemetry()) }
+    var videoOptions by remember(channel.id) { mutableStateOf<List<VideoTrackOption>>(emptyList()) }
+    var audioOptions by remember(channel.id) { mutableStateOf<List<AudioTrackOption>>(emptyList()) }
+    var isAutoVideo by remember(channel.id) { mutableStateOf(true) }
+    var isAutoAudio by remember(channel.id) { mutableStateOf(true) }
+
+    // Debounce brief <250ms transitions so adaptive switches feel instant & flicker-free
+    LaunchedEffect(isBuffering, isRefreshingChannel) {
+        if (isRefreshingChannel) {
+            showBufferingUi = true
+        } else if (isBuffering) {
+            delay(250)
+            showBufferingUi = true
+        } else {
+            showBufferingUi = false
+        }
+    }
+
+    // Auto-hide overlay controls after 4 seconds while actively playing
+    LaunchedEffect(showControls, isPlaying, isBuffering, controlsTouchTick) {
+        if (showControls && isPlaying && !isBuffering && errorHeadline == null) {
+            delay(4_000)
+            showControls = false
+        }
+    }
+
+    // Auto-dismiss brief aspect ratio feedback badge
+    LaunchedEffect(ratioToastTick) {
+        if (ratioToastText != null) {
+            delay(1_400)
+            ratioToastText = null
+        }
+    }
+
+    val currentIndex = remember(relatedChannels, channel.id) {
+        relatedChannels.indexOfFirst { it.id == channel.id }
+    }
+    val canNavigatePrev = currentIndex > 0
+    val canNavigateNext = currentIndex in 0 until (relatedChannels.size - 1)
 
     val hdneaToken = remember(channel) {
         val cookie = channel.headers.entries
@@ -241,7 +373,6 @@ fun PlayerScreen(
                 map[k] = v
             }
         }
-        // Ensure Cookie header carries __hdnea__ when token was only present in the URL query
         if (!hdneaToken.isNullOrBlank() &&
             map.keys.none { it.equals("Cookie", ignoreCase = true) }
         ) {
@@ -281,12 +412,21 @@ fun PlayerScreen(
     val exoPlayer = remember(channel.id, channel.streamUrl, channel.headers, compatMode, reloadKey) {
         errorHeadline = null
         errorHint = null
+        isBuffering = true
+
+        // Start with a modest 1.2 Mbps initial estimate so mobile CDN HLS channels open instantly
+        // on the first segment and smoothly ramp up to 1080p within 2-3 seconds.
+        val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+            .setInitialBitrateEstimate(1_200_000L)
+            .setResetOnNetworkTypeChange(true)
+            .build()
 
         val rawHttpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(userAgent)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(20_000)
-            .setReadTimeoutMs(25_000)
+            .setConnectTimeoutMs(10_000)
+            .setReadTimeoutMs(12_000)
+            .setTransferListener(bandwidthMeter)
             .setDefaultRequestProperties(requestHeaders)
 
         val dataSourceFactory: DataSource.Factory = if (compatMode == 0 && !hdneaToken.isNullOrBlank()) {
@@ -343,50 +483,111 @@ fun PlayerScreen(
             }
             .build()
 
+        // Keep retry count fast (2) so mobile CDN glitches or compat fallbacks don't stall for 20+ seconds
+        val loadErrorHandlingPolicy = DefaultLoadErrorHandlingPolicy(2)
+
         val mediaSource = when {
             channel.isDash -> DashMediaSource.Factory(dataSourceFactory)
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                 .apply { drmSessionManager?.let { manager -> setDrmSessionManagerProvider { manager } } }
                 .createMediaSource(mediaItem)
 
             finalStreamUrl.contains(".m3u8", ignoreCase = true) -> HlsMediaSource.Factory(dataSourceFactory)
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                 .apply { drmSessionManager?.let { manager -> setDrmSessionManagerProvider { manager } } }
                 .createMediaSource(mediaItem)
 
             else -> DefaultMediaSourceFactory(dataSourceFactory)
+                .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                 .apply { drmSessionManager?.let { manager -> setDrmSessionManagerProvider { manager } } }
                 .createMediaSource(mediaItem)
         }
 
-        // Enable software decoder fallback so streams also decode reliably on emulators & diverse devices
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
 
+        // Live-window friendly buffer profile: instant 0.6s start + steady 6-25s live cushion
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15_000, // minBufferMs
-                50_000, // maxBufferMs
-                1_500,  // bufferForPlaybackMs
-                3_000   // bufferForPlaybackAfterRebufferMs
+                6_000,  // minBufferMs (fits cleanly inside mobile HLS live windows)
+                25_000, // maxBufferMs
+                600,    // bufferForPlaybackMs (fast first-frame start)
+                1_500   // bufferForPlaybackAfterRebufferMs
             )
             .build()
 
-        val trackSelector = DefaultTrackSelector(context)
+        // Fast-ramping ABR: starts immediately without stalling, climbs to HD quickly, drops early on dips
+        val adaptiveTrackFactory = AdaptiveTrackSelection.Factory(
+            2_500, // minDurationForQualityIncreaseMs (fast upgrade to 1080p)
+            3_000, // maxDurationForQualityDecreaseMs
+            4_000, // minDurationToRetainAfterDiscardMs
+            0.75f  // bandwidthFraction
+        )
+        val trackSelector = DefaultTrackSelector(context, adaptiveTrackFactory).apply {
+            setParameters(
+                buildUponParameters()
+                    .setAllowVideoMixedMimeTypeAdaptiveness(true)
+                    .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                    .setAllowVideoNonSeamlessAdaptiveness(true)
+                    .setExceedRendererCapabilitiesIfNecessary(true)
+            )
+        }
+
         ExoPlayer.Builder(context, renderersFactory)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
+            .setBandwidthMeter(bandwidthMeter)
             .build()
             .apply {
+                volume = if (isMuted) 0f else 1f
                 setMediaSource(mediaSource)
                 playWhenReady = true
                 prepare()
+
+                fun syncFormats(audioFmt: Format?, videoFmt: Format?) {
+                    telemetry = telemetry.copy(
+                        audioCodec = formatAudioCodec(audioFmt?.sampleMimeType).ifEmpty { telemetry.audioCodec },
+                        videoWidth = videoFmt?.width?.takeIf { it > 0 } ?: telemetry.videoWidth,
+                        videoHeight = videoFmt?.height?.takeIf { it > 0 } ?: telemetry.videoHeight
+                    )
+                }
+
                 addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        isBuffering = playbackState == Player.STATE_BUFFERING ||
+                            (playbackState == Player.STATE_IDLE && errorHeadline == null)
+                        if (playbackState == Player.STATE_READY) {
+                            syncFormats(audioFormat, videoFormat)
+                        }
+                    }
+
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        isPlaying = playing
+                    }
+
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        if (videoSize.width > 0 && videoSize.height > 0) {
+                            telemetry = telemetry.copy(
+                                videoWidth = videoSize.width,
+                                videoHeight = videoSize.height
+                            )
+                        }
+                    }
+
+                    override fun onTracksChanged(tracks: Tracks) {
+                        val (videos, audios) = extractTrackLists(tracks)
+                        videoOptions = videos
+                        audioOptions = audios
+                        syncFormats(audioFormat, videoFormat)
+                    }
+
                     override fun onPlayerError(error: PlaybackException) {
+                        isBuffering = false
                         val httpCode = generateSequence<Throwable>(error) { it.cause }
                             .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
                             .firstOrNull()
                             ?.responseCode
 
-                        // Automatically try strict raw playlist mode once on HTTP 400/403
                         if (compatMode == 0 && (httpCode == 400 || httpCode == 403)) {
                             compatMode = 1
                             return
@@ -408,7 +609,7 @@ fun PlayerScreen(
         }
     }
 
-    // Pause when backgrounded (unless in Picture-in-Picture) and resume on return
+    // Pause when backgrounded (unless in Picture-in-Picture)
     DisposableEffect(lifecycleOwner, exoPlayer) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -433,13 +634,27 @@ fun PlayerScreen(
         }
     }
 
-    // Manage fullscreen system bars & orientation
+    // Fullscreen system bars, display cutout edge-to-edge fill, & orientation management
     DisposableEffect(isLandscape) {
+        resizeMode = if (isLandscape) {
+            AspectRatioFrameLayout.RESIZE_MODE_FILL
+        } else {
+            AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
         activity?.let { act ->
             act.requestedOrientation = if (isLandscape) {
                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             } else {
                 ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                act.window.attributes = act.window.attributes.apply {
+                    layoutInDisplayCutoutMode = if (isLandscape) {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    } else {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    }
+                }
             }
             val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
             if (isLandscape) {
@@ -453,132 +668,49 @@ fun PlayerScreen(
         onDispose { }
     }
 
-    // Release player and restore orientation/system bars when leaving player
+    // Release player and restore window chrome when leaving player
     DisposableEffect(exoPlayer) {
         onDispose {
             exoPlayer.release()
             activity?.let { act ->
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    act.window.attributes = act.window.attributes.apply {
+                        layoutInDisplayCutoutMode =
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    }
+                }
                 WindowCompat.getInsetsController(act.window, act.window.decorView)
                     .show(WindowInsetsCompat.Type.systemBars())
             }
         }
     }
 
-    val resizeLabel = when (resizeMode) {
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> stringResource(R.string.aspect_zoom)
-        AspectRatioFrameLayout.RESIZE_MODE_FILL -> stringResource(R.string.aspect_fill)
-        else -> stringResource(R.string.aspect_fit)
-    }
+    val fitLabel = stringResource(R.string.aspect_fit)
+    val zoomLabel = stringResource(R.string.aspect_zoom)
+    val fillLabel = stringResource(R.string.aspect_fill)
 
     val isInPipMode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
         activity?.isInPictureInPictureMode == true
+
+    val cycleRatio: () -> Unit = {
+        val (nextMode, nextLabel) = when (resizeMode) {
+            AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM to zoomLabel
+            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL to fillLabel
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT to fitLabel
+        }
+        resizeMode = nextMode
+        ratioToastText = context.getString(R.string.ratio_pill_format, nextLabel)
+        ratioToastTick++
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(DarkBackground)
+            .then(if (!isLandscape && !isInPipMode) Modifier.statusBarsPadding() else Modifier)
     ) {
-        // Top Player Bar (hidden in landscape fullscreen or PiP)
-        if (!isLandscape && !isInPipMode) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.testTag("player_back_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.cd_back),
-                        tint = Color.White
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = channel.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = buildString {
-                            append(channel.group)
-                            append(" · ")
-                            append(if (channel.isDash) "DASH" else "HLS")
-                            if (channel.clearKeys.isNotEmpty() || channel.licenseType.contains("clearkey")) {
-                                append(" · ClearKey")
-                            } else if (channel.licenseType.contains("widevine")) {
-                                append(" · Widevine")
-                            }
-                            append(" · ")
-                            append(resizeLabel)
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = DarkOnSurfaceMuted,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity != null) {
-                    IconButton(
-                        onClick = {
-                            runCatching {
-                                val params = PictureInPictureParams.Builder()
-                                    .setAspectRatio(Rational(16, 9))
-                                    .build()
-                                activity.enterPictureInPictureMode(params)
-                            }
-                        },
-                        modifier = Modifier.testTag("player_pip_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PictureInPictureAlt,
-                            contentDescription = stringResource(R.string.cd_pip),
-                            tint = Color.White
-                        )
-                    }
-                }
-
-                IconButton(
-                    onClick = {
-                        resizeMode = when (resizeMode) {
-                            AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        }
-                    },
-                    modifier = Modifier.testTag("player_aspect_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AspectRatio,
-                        contentDescription = stringResource(R.string.cd_aspect_ratio),
-                        tint = Color.White
-                    )
-                }
-
-                IconButton(
-                    onClick = { isLandscape = !isLandscape },
-                    modifier = Modifier.testTag("player_rotate_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ScreenRotation,
-                        contentDescription = stringResource(R.string.cd_rotate),
-                        tint = Color.White
-                    )
-                }
-            }
-        }
-
-        // Video Stage
+        // Pinned 16:9 Video Stage (full-bleed in landscape / PiP)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -596,8 +728,7 @@ fun PlayerScreen(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         player = exoPlayer
-                        useController = !isInPipMode
-                        setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                        useController = false
                         layoutParams = FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
@@ -607,289 +738,236 @@ fun PlayerScreen(
                 update = { view ->
                     view.player = exoPlayer
                     view.resizeMode = resizeMode
-                    view.useController = !isInPipMode
+                    view.useController = false
                 }
             )
 
-            // Exit-fullscreen button in landscape top-right
-            if (isLandscape && !isInPipMode) {
-                IconButton(
-                    onClick = { isLandscape = false },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x99000000))
-                        .testTag("player_exit_landscape_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ScreenRotation,
-                        contentDescription = stringResource(R.string.cd_rotate),
-                        tint = Color.White
-                    )
-                }
+            // Custom Sleek Compose Player Overlay + Glowing Buffering Indicator
+            if (!isInPipMode) {
+                PlayerVideoOverlay(
+                    channelName = channel.name,
+                    isPlaying = isPlaying,
+                    isBuffering = showBufferingUi && errorHeadline == null,
+                    isMuted = isMuted,
+                    isFavorite = isFavorite,
+                    isLandscape = isLandscape,
+                    showControls = showControls && errorHeadline == null,
+                    canNavigatePrev = canNavigatePrev,
+                    canNavigateNext = canNavigateNext,
+                    ratioToastText = ratioToastText,
+                    telemetry = telemetry,
+                    onToggleControls = {
+                        showControls = !showControls
+                        controlsTouchTick++
+                    },
+                    onBack = {
+                        if (isLandscape) isLandscape = false else onBack()
+                    },
+                    onToggleFavorite = {
+                        controlsTouchTick++
+                        onToggleFavorite()
+                    },
+                    onOpenTracks = {
+                        controlsTouchTick++
+                        showTracksSheet = true
+                    },
+                    onPrevChannel = {
+                        if (canNavigatePrev) {
+                            onSelectChannel(relatedChannels[currentIndex - 1])
+                        }
+                    },
+                    onPlayPause = {
+                        controlsTouchTick++
+                        if (exoPlayer.isPlaying) {
+                            exoPlayer.pause()
+                        } else {
+                            exoPlayer.play()
+                        }
+                    },
+                    onNextChannel = {
+                        if (canNavigateNext) {
+                            onSelectChannel(relatedChannels[currentIndex + 1])
+                        }
+                    },
+                    onGoLive = {
+                        controlsTouchTick++
+                        exoPlayer.seekToDefaultPosition()
+                        exoPlayer.playWhenReady = true
+                        exoPlayer.play()
+                    },
+                    onToggleMute = {
+                        controlsTouchTick++
+                        isMuted = !isMuted
+                        exoPlayer.volume = if (isMuted) 0f else 1f
+                    },
+                    onCycleRatio = {
+                        controlsTouchTick++
+                        cycleRatio()
+                    },
+                    onToggleFullscreen = {
+                        controlsTouchTick++
+                        isLandscape = !isLandscape
+                    }
+                )
             }
 
-            if (isRefreshingChannel) {
+            // Playback Error Card Overlay
+            errorHeadline?.let { headline ->
                 Column(
                     modifier = Modifier
+                        .padding(14.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xEE11131A))
-                        .padding(20.dp),
+                        .border(1.dp, DarkOutline, RoundedCornerShape(16.dp))
+                        .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    CircularProgressIndicator(color = CyanGlow, modifier = Modifier.size(32.dp))
-                    Spacer(Modifier.height(10.dp))
                     Text(
-                        text = stringResource(R.string.refreshing_stream_token),
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium
+                        text = headline,
+                        color = ErrorSoft,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
                     )
-                }
-            } else {
-                errorHeadline?.let { headline ->
-                    Column(
-                        modifier = Modifier
-                            .padding(16.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xEE11131A))
-                            .border(1.dp, DarkOutline, RoundedCornerShape(16.dp))
-                            .padding(18.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
+                    errorHint?.let { hint ->
+                        Spacer(Modifier.height(6.dp))
                         Text(
-                            text = headline,
-                            color = ErrorSoft,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                            text = hint,
+                            color = DarkOnSurfaceMuted,
+                            style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center
                         )
-                        errorHint?.let { hint ->
-                            Spacer(Modifier.height(6.dp))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = {
+                                compatMode = 0
+                                onRefreshChannel()
+                                reloadKey++
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CyanGlow,
+                                contentColor = Color.Black
+                            ),
+                            modifier = Modifier.testTag("refresh_token_retry_button")
+                        ) {
+                            Icon(
+                                Icons.Default.Sync,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
                             Text(
-                                text = hint,
-                                color = DarkOnSurfaceMuted,
-                                style = MaterialTheme.typography.bodyMedium,
-                                textAlign = TextAlign.Center
+                                text = stringResource(R.string.action_refresh_token),
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                        Spacer(Modifier.height(14.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        OutlinedButton(
+                            onClick = {
+                                compatMode = 0
+                                reloadKey++
+                            },
+                            modifier = Modifier.testTag("retry_stream_button")
                         ) {
-                            Button(
-                                onClick = {
-                                    compatMode = 0
-                                    onRefreshChannel()
-                                    reloadKey++
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = CyanGlow,
-                                    contentColor = Color.Black
-                                ),
-                                modifier = Modifier.testTag("refresh_token_retry_button")
-                            ) {
-                                Icon(
-                                    Icons.Default.Sync,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = stringResource(R.string.action_refresh_token),
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    compatMode = 0
-                                    reloadKey++
-                                },
-                                modifier = Modifier.testTag("retry_stream_button")
-                            ) {
-                                Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = stringResource(R.string.action_retry),
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Portrait Channel Info & Quick Channel Switcher
-        if (!isLandscape && !isInPipMode) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DarkSurface)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(PlusTvBrandGradient)
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.live_badge),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White
-                        )
-                    }
-                    Text(
-                        text = stringResource(R.string.now_playing_label) + " · " + channel.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    IconButton(
-                        onClick = {
-                            compatMode = 0
-                            onRefreshChannel()
-                            reloadKey++
-                        },
-                        modifier = Modifier.testTag("player_reload_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = stringResource(R.string.cd_reload_stream),
-                            tint = DarkOnSurfaceMuted
-                        )
-                    }
-                    IconButton(
-                        onClick = onToggleFavorite,
-                        modifier = Modifier.testTag("player_favorite_button")
-                    ) {
-                        Icon(
-                            imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = stringResource(R.string.cd_toggle_favorite),
-                            tint = if (isFavorite) StarGold else DarkOnSurfaceMuted
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(color = DarkOutline, thickness = 1.dp)
-
-            if (relatedChannels.isNotEmpty()) {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .navigationBarsPadding(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    item {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(4.dp)
-                                    .height(18.dp)
-                                    .clip(RoundedCornerShape(99.dp))
-                                    .background(PlusTvBrandGradient)
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
                             )
-                            Spacer(Modifier.width(10.dp))
+                            Spacer(Modifier.width(4.dp))
                             Text(
-                                text = stringResource(R.string.up_next_in_category, channel.group),
-                                style = MaterialTheme.typography.titleMedium,
+                                text = stringResource(R.string.action_retry),
                                 color = Color.White
                             )
                         }
                     }
-
-                    items(relatedChannels, key = { it.id }) { item ->
-                        val isCurrent = item.id == channel.id
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (isCurrent) Color(0xFF1A2233) else DarkSurface)
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isCurrent) CyanGlow else DarkOutline,
-                                    shape = RoundedCornerShape(14.dp)
-                                )
-                                .clickable { onSelectChannel(item) }
-                                .padding(10.dp)
-                                .testTag("related_channel_${item.id}"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(52.dp, 40.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(DarkTileStage)
-                                    .padding(4.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (item.logo.isNotBlank()) {
-                                    AsyncImage(
-                                        model = item.logo,
-                                        contentDescription = item.name,
-                                        contentScale = ContentScale.Fit,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    Text(
-                                        text = item.name.take(2).uppercase(),
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = CyanGlow
-                                    )
-                                }
-                            }
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = item.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "${item.group} · ${if (item.isDash) "DASH" else "HLS"}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = DarkOnSurfaceMuted,
-                                    maxLines = 1
-                                )
-                            }
-
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = if (isCurrent) CyanGlow else DarkOnSurfaceMuted
-                            )
-                        }
-                    }
                 }
             }
         }
+
+        // Portrait Lower Content: Directly "More in Category" + 3-Column Grid
+        if (!isLandscape && !isInPipMode && relatedChannels.isNotEmpty()) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .navigationBarsPadding(),
+                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    MoreInCategoryHeader(category = channel.group)
+                }
+
+                items(relatedChannels, key = { it.id }) { item ->
+                    RelatedChannelGridTile(
+                        channel = item,
+                        isCurrent = item.id == channel.id,
+                        onClick = { onSelectChannel(item) }
+                    )
+                }
+            }
+        }
+    }
+
+    // Quality & Audio Tracks Modal Bottom Sheet
+    if (showTracksSheet) {
+        TracksSelectionBottomSheet(
+            videoOptions = videoOptions,
+            audioOptions = audioOptions,
+            isAutoVideo = isAutoVideo,
+            isAutoAudio = isAutoAudio,
+            onSelectAutoVideo = {
+                isAutoVideo = true
+                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                    .buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .build()
+            },
+            onSelectVideoTrack = { option ->
+                val group = exoPlayer.currentTracks.groups.getOrNull(option.groupIndex)
+                if (group != null) {
+                    isAutoVideo = false
+                    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                        .buildUpon()
+                        .setOverrideForType(
+                            TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex)
+                        )
+                        .build()
+                }
+            },
+            onSelectAutoAudio = {
+                isAutoAudio = true
+                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                    .buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .build()
+            },
+            onSelectAudioTrack = { option ->
+                val group = exoPlayer.currentTracks.groups.getOrNull(option.groupIndex)
+                if (group != null) {
+                    isAutoAudio = false
+                    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                        .buildUpon()
+                        .setOverrideForType(
+                            TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex)
+                        )
+                        .build()
+                }
+            },
+            onRefreshToken = {
+                compatMode = 0
+                onRefreshChannel()
+                reloadKey++
+            },
+            onDismiss = { showTracksSheet = false }
+        )
     }
 }
