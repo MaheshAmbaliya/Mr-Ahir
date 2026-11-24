@@ -14,10 +14,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-const val DEFAULT_M3U_URL = "https://jiobkl.ytzinadabaad.workers.dev/"
+// 👇 YAHAN APNA GIST M3U LINK PASTE KAREIN (Future mein badalna ho toh bas isi line ko edit karein)
+const val DEFAULT_M3U_URL = "https://gist.githubusercontent.com/MaheshAmbaliya/ab181cc050840b4f3cd96d905b1803e3/raw/channel.m3u"
+
 private const val PREFS_NAME = "plustv_prefs"
 private const val KEY_DARK_MODE = "dark_mode"
-private const val KEY_PLAYLIST_URL = "playlist_url"
 private const val KEY_FAVORITES = "favorites"
 
 data class PlusTvUiState(
@@ -70,22 +71,21 @@ class PlusTvViewModel(application: Application) : AndroidViewModel(application) 
     private val _uiState = MutableStateFlow(
         PlusTvUiState(
             isDark = prefs.getBoolean(KEY_DARK_MODE, true),
-            playlistUrl = prefs.getString(KEY_PLAYLIST_URL, DEFAULT_M3U_URL) ?: DEFAULT_M3U_URL,
+            playlistUrl = DEFAULT_M3U_URL,
             favorites = prefs.getStringSet(KEY_FAVORITES, emptySet())?.toSet() ?: emptySet()
         )
     )
     val uiState: StateFlow<PlusTvUiState> = _uiState.asStateFlow()
 
     init {
-        loadPlaylist(_uiState.value.playlistUrl)
+        loadPlaylist(DEFAULT_M3U_URL)
     }
 
-    fun loadPlaylist(url: String) {
-        val trimmed = url.trim().ifBlank { DEFAULT_M3U_URL }
-        prefs.edit().putString(KEY_PLAYLIST_URL, trimmed).apply()
+    fun loadPlaylist(url: String = DEFAULT_M3U_URL) {
+        val targetUrl = url.trim().ifBlank { DEFAULT_M3U_URL }
         _uiState.update {
             it.copy(
-                playlistUrl = trimmed,
+                playlistUrl = targetUrl,
                 isLoading = true,
                 errorText = null
             )
@@ -93,7 +93,7 @@ class PlusTvViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 val parsed = withContext(Dispatchers.IO) {
-                    val raw = M3uParser.fetchPlaylistText(trimmed)
+                    val raw = M3uParser.fetchPlaylistText(targetUrl)
                     M3uParser.parse(raw)
                 }
                 _uiState.update {
@@ -114,18 +114,13 @@ class PlusTvViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * Re-fetches the M3U playlist to get fresh auth tokens (__hdnea__ cookies/URLs)
-     * and seamlessly swaps in the updated channel record while staying in the player.
-     */
     fun refreshActiveChannel() {
         val current = _uiState.value.activeChannel ?: return
-        val url = _uiState.value.playlistUrl
         _uiState.update { it.copy(isRefreshingChannel = true) }
         viewModelScope.launch {
             try {
                 val parsed = withContext(Dispatchers.IO) {
-                    val raw = M3uParser.fetchPlaylistText(url)
+                    val raw = M3uParser.fetchPlaylistText(DEFAULT_M3U_URL)
                     M3uParser.parse(raw)
                 }
                 val matched = parsed.firstOrNull { ch ->
@@ -177,6 +172,15 @@ class PlusTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleFavoritesFilter() {
         _uiState.update { it.copy(showFavoritesOnly = !it.showFavoritesOnly) }
+    }
+
+    fun setFavoritesFilter(enabled: Boolean) {
+        _uiState.update {
+            it.copy(
+                showFavoritesOnly = enabled,
+                selectedCategory = if (enabled) it.selectedCategory else "All"
+            )
+        }
     }
 
     fun clearFilters() {
