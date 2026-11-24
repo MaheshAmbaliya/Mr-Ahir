@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // 👇 YAHAN APNA GIST M3U LINK PASTE KAREIN (Future mein badalna ho toh bas isi line ko edit karein)
-const val DEFAULT_M3U_URL = "https://gist.githubusercontent.com/MaheshAmbaliya/ab181cc050840b4f3cd96d905b1803e3/raw/channel.m3u"
+const val DEFAULT_M3U_URL = "https://api.npoint.io/055532d2d079bd64a810"
 
 private const val PREFS_NAME = "plustv_prefs"
 private const val KEY_DARK_MODE = "dark_mode"
