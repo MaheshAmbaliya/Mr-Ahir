@@ -45,6 +45,147 @@ object M3uParser {
     }
 
     fun parse(rawText: String): List<TvChannel> {
+        val trimmed = rawText.trimStart('\uFEFF').trim()
+        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+            val jsonChannels = parseJson(trimmed)
+            if (jsonChannels.isNotEmpty()) return jsonChannels
+        }
+        return parseM3u(rawText)
+    }
+
+    private fun parseJson(jsonText: String): List<TvChannel> {
+        val channels = mutableListOf<TvChannel>()
+        runCatching {
+            val array: JSONArray? = if (jsonText.startsWith("[")) {
+                JSONArray(jsonText)
+            } else {
+                val rootObj = JSONObject(jsonText)
+                rootObj.optJSONArray("channels")
+                    ?: rootObj.optJSONArray("data")
+                    ?: rootObj.optJSONArray("list")
+                    ?: rootObj.optJSONArray("items")
+                    ?: rootObj.optJSONArray("playlist")
+            }
+
+            if (array == null) return emptyList()
+
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+
+                val rawUrlField = firstNonBlank(
+                    obj,
+                    "streamUrl", "stream_url", "url", "link", "m3u8", "mpd", "stream", "playUrl"
+                )
+                if (rawUrlField.isBlank()) continue
+
+                val pipeIdx = rawUrlField.indexOf('|')
+                val rawUrl = if (pipeIdx >= 0) rawUrlField.substring(0, pipeIdx).trim() else rawUrlField
+
+                val headers = LinkedHashMap<String, String>()
+                if (pipeIdx >= 0) {
+                    parseHeaderParams(rawUrlField.substring(pipeIdx + 1)).forEach { (k, v) ->
+                        headers[normalizeHeaderName(k)] = v
+                    }
+                }
+
+                // Direct header fields in JSON object
+                val ua = firstNonBlank(obj, "userAgent", "user-agent", "user_agent", "ua")
+                if (ua.isNotBlank()) headers["User-Agent"] = ua
+
+                val cookie = firstNonBlank(obj, "cookie", "Cookie", "cookies")
+                if (cookie.isNotBlank()) headers["Cookie"] = cookie
+
+                val referer = firstNonBlank(obj, "referer", "referrer", "Referer")
+                if (referer.isNotBlank()) headers["Referer"] = referer
+
+                val origin = firstNonBlank(obj, "origin", "Origin")
+                if (origin.isNotBlank()) headers["Origin"] = origin
+
+                // Nested headers JSONObject support: "headers": { "Cookie": "...", "User-Agent": "..." }
+                val headersObj = obj.optJSONObject("headers") ?: obj.optJSONObject("httpHeaders")
+                if (headersObj != null) {
+                    val keys = headersObj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        val v = headersObj.optString(k, "").trim()
+                        if (v.isNotEmpty()) {
+                            headers[normalizeHeaderName(k)] = v
+                        }
+                    }
+                }
+
+                val hasCookieHdnea = headers["Cookie"].orEmpty().contains("__hdnea__=")
+                val cleanUrl = if (hasCookieHdnea) stripStaleAuthParams(rawUrl) else rawUrl
+
+                val name = firstNonBlank(obj, "name", "title", "channel_name", "channelName", "tvg_name")
+                    .ifBlank { "Channel ${channels.size + 1}" }
+                val tvgId = firstNonBlank(obj, "tvgId", "tvg_id", "tvg-id", "id", "channel_id")
+                val logo = firstNonBlank(obj, "logo", "tvg_logo", "tvg-logo", "image", "icon", "poster")
+                val group = firstNonBlank(obj, "group", "category", "group_title", "group-title", "genre")
+                    .ifBlank { "General" }
+
+                // ClearKey / DRM support
+                val clearKeys = LinkedHashMap<String, String>()
+                val drmObj = obj.optJSONObject("drm") ?: obj.optJSONObject("clearKeys") ?: obj.optJSONObject("clearkey")
+                if (drmObj != null) {
+                    val keys = drmObj.keys()
+                    while (keys.hasNext()) {
+                        val rawKid = keys.next()
+                        val rawKey = drmObj.optString(rawKid, "")
+                        val kid = normalizeKeyToHex(rawKid)
+                        val k = normalizeKeyToHex(rawKey)
+                        if (kid.isNotEmpty() && k.isNotEmpty()) clearKeys[kid] = k
+                    }
+                }
+                val singleKid = firstNonBlank(obj, "kid", "keyId", "key_id")
+                val singleKey = firstNonBlank(obj, "key", "clearKey", "clearkey_value")
+                if (singleKid.isNotBlank() && singleKey.isNotBlank()) {
+                    val kidHex = normalizeKeyToHex(singleKid)
+                    val keyHex = normalizeKeyToHex(singleKey)
+                    if (kidHex.isNotEmpty() && keyHex.isNotEmpty()) clearKeys[kidHex] = keyHex
+                }
+                val licenseKeyStr = firstNonBlank(obj, "licenseKey", "license_key", "drm_key")
+                if (clearKeys.isEmpty() && licenseKeyStr.isNotBlank() && !licenseKeyStr.startsWith("http")) {
+                    clearKeys.putAll(parseClearKeys(licenseKeyStr))
+                }
+
+                val licenseUrl = firstNonBlank(obj, "licenseUrl", "license_url")
+                val licenseType = firstNonBlank(obj, "licenseType", "license_type")
+                    .ifBlank { if (clearKeys.isNotEmpty()) "clearkey" else "" }
+
+                val isDash = obj.optBoolean("isDash", false) ||
+                    cleanUrl.contains(".mpd", ignoreCase = true) ||
+                    clearKeys.isNotEmpty()
+
+                channels.add(
+                    TvChannel(
+                        id = "ch-${channels.size + 1}-${tvgId.ifBlank { name }}",
+                        tvgId = tvgId,
+                        name = name,
+                        logo = logo,
+                        group = group,
+                        streamUrl = cleanUrl,
+                        isDash = isDash,
+                        clearKeys = clearKeys,
+                        headers = headers,
+                        licenseType = licenseType,
+                        licenseUrl = licenseUrl
+                    )
+                )
+            }
+        }
+        return channels
+    }
+
+    private fun firstNonBlank(obj: JSONObject, vararg keys: String): String {
+        for (key in keys) {
+            val value = obj.optString(key, "").trim()
+            if (value.isNotEmpty() && value != "null") return value
+        }
+        return ""
+    }
+
+    private fun parseM3u(rawText: String): List<TvChannel> {
         val lines = rawText.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         val channels = mutableListOf<TvChannel>()
 
@@ -191,10 +332,6 @@ object M3uParser {
         return channels
     }
 
-    /**
-     * Converts ClearKey hex pairs (kid -> key) into W3C ClearKey JWK JSON bytes
-     * required by Media3 LocalMediaDrmCallback.
-     */
     fun buildClearKeyJwkBytes(clearKeys: Map<String, String>): ByteArray {
         val keysArr = JSONArray()
         clearKeys.forEach { (kidHex, keyHex) ->
@@ -244,7 +381,6 @@ object M3uParser {
                         if (kid.isNotEmpty() && k.isNotEmpty()) result[kid] = k
                     }
                 } else {
-                    // Support flat JSON map format: {"kidHex": "keyHex"}
                     val keys = obj.keys()
                     while (keys.hasNext()) {
                         val rawKid = keys.next()
@@ -311,10 +447,6 @@ object M3uParser {
             else -> name.trim()
         }
 
-    /**
-     * Percent-decodes %XX sequences while preserving literal '+' characters
-     * (important for base64 / HMAC auth tokens and User-Agent strings).
-     */
     private fun safeDecode(value: String): String {
         if (!value.contains('%')) return value
         return runCatching {
