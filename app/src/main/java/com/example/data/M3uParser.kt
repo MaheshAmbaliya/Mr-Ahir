@@ -44,23 +44,26 @@ object M3uParser {
         }
     }
 
-    fun parse(rawText: String): List<TvChannel> {
+    fun parse(rawText: String, depth: Int = 0): List<TvChannel> {
+        if (depth > 2) return emptyList()
         val trimmed = rawText.trimStart('\uFEFF').trim()
         if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-            val jsonChannels = parseJson(trimmed)
+            val jsonChannels = parseJson(trimmed, depth)
             if (jsonChannels.isNotEmpty()) return jsonChannels
         }
         return parseM3u(rawText)
     }
 
-    private fun parseJson(jsonText: String): List<TvChannel> {
+    private fun parseJson(jsonText: String, depth: Int): List<TvChannel> {
         val channels = mutableListOf<TvChannel>()
         runCatching {
             val array: JSONArray? = if (jsonText.startsWith("[")) {
                 JSONArray(jsonText)
             } else {
                 val rootObj = JSONObject(jsonText)
-                rootObj.optJSONArray("channels")
+                rootObj.optJSONArray("playlists")
+                    ?: rootObj.optJSONArray("urls")
+                    ?: rootObj.optJSONArray("channels")
                     ?: rootObj.optJSONArray("data")
                     ?: rootObj.optJSONArray("list")
                     ?: rootObj.optJSONArray("items")
@@ -70,7 +73,29 @@ object M3uParser {
             if (array == null) return emptyList()
 
             for (i in 0 until array.length()) {
-                val obj = array.optJSONObject(i) ?: continue
+                val item = array.opt(i) ?: continue
+
+                // Case 1: Array contains nested Playlist URLs e.g. ["https://example.com/list.m3u"]
+                if (item is String) {
+                    val nestedUrl = item.trim()
+                    if (nestedUrl.startsWith("http://", ignoreCase = true) ||
+                        nestedUrl.startsWith("https://", ignoreCase = true)
+                    ) {
+                        runCatching {
+                            val nestedRaw = fetchPlaylistText(nestedUrl)
+                            val nestedChannels = parse(nestedRaw, depth + 1)
+                            nestedChannels.forEach { ch ->
+                                channels.add(
+                                    ch.copy(id = "ch-${channels.size + 1}-${ch.tvgId.ifBlank { ch.name }}")
+                                )
+                            }
+                        }
+                    }
+                    continue
+                }
+
+                // Case 2: Array contains Channel JSONObjects e.g. [{"name": "...", "url": "..."}]
+                val obj = item as? JSONObject ?: continue
 
                 val rawUrlField = firstNonBlank(
                     obj,
@@ -88,7 +113,6 @@ object M3uParser {
                     }
                 }
 
-                // Direct header fields in JSON object
                 val ua = firstNonBlank(obj, "userAgent", "user-agent", "user_agent", "ua")
                 if (ua.isNotBlank()) headers["User-Agent"] = ua
 
@@ -101,7 +125,6 @@ object M3uParser {
                 val origin = firstNonBlank(obj, "origin", "Origin")
                 if (origin.isNotBlank()) headers["Origin"] = origin
 
-                // Nested headers JSONObject support: "headers": { "Cookie": "...", "User-Agent": "..." }
                 val headersObj = obj.optJSONObject("headers") ?: obj.optJSONObject("httpHeaders")
                 if (headersObj != null) {
                     val keys = headersObj.keys()
@@ -124,7 +147,6 @@ object M3uParser {
                 val group = firstNonBlank(obj, "group", "category", "group_title", "group-title", "genre")
                     .ifBlank { "General" }
 
-                // ClearKey / DRM support
                 val clearKeys = LinkedHashMap<String, String>()
                 val drmObj = obj.optJSONObject("drm") ?: obj.optJSONObject("clearKeys") ?: obj.optJSONObject("clearkey")
                 if (drmObj != null) {
