@@ -310,6 +310,7 @@ fun PlayerScreen(
     var controlsTouchTick by remember { mutableIntStateOf(0) }
     var showTracksSheet by remember { mutableStateOf(false) }
 
+    // 0 = Playlist headers + NS Player UA (clean URL), 1 = JioTV UA + token, 2 = Pure Lavf/ExoPlayer UA without extra headers
     var compatMode by remember(channel.id, channel.streamUrl) { mutableIntStateOf(0) }
     var reloadKey by remember { mutableIntStateOf(0) }
 
@@ -322,7 +323,6 @@ fun PlayerScreen(
     var isAutoVideo by remember(channel.id) { mutableStateOf(true) }
     var isAutoAudio by remember(channel.id) { mutableStateOf(true) }
 
-    // Debounce brief <250ms transitions so adaptive switches feel instant & flicker-free
     LaunchedEffect(isBuffering, isRefreshingChannel) {
         if (isRefreshingChannel) {
             showBufferingUi = true
@@ -334,7 +334,6 @@ fun PlayerScreen(
         }
     }
 
-    // Auto-hide overlay controls after 4 seconds while actively playing
     LaunchedEffect(showControls, isPlaying, isBuffering, controlsTouchTick) {
         if (showControls && isPlaying && !isBuffering && errorHeadline == null) {
             delay(4_000)
@@ -342,7 +341,6 @@ fun PlayerScreen(
         }
     }
 
-    // Auto-dismiss brief aspect ratio feedback badge
     LaunchedEffect(ratioToastTick) {
         if (ratioToastText != null) {
             delay(1_400)
@@ -366,39 +364,48 @@ fun PlayerScreen(
         fromCookie ?: fromUrl
     }
 
-    val requestHeaders = remember(channel, compatMode, hdneaToken) {
+    val userAgent = remember(channel, compatMode) {
+        val playlistUa = channel.headers.entries
+            .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
+            ?.value
+            ?.takeIf { it.isNotBlank() }
+
+        when (compatMode) {
+            0 -> playlistUa ?: "NS Player/1.0 (Linux; Android 13) ExoPlayerLib/2.18.1"
+            1 -> playlistUa ?: "plaYtv/7.1.5 (Linux;Android 13) ExoPlayerLib/2.11.7"
+            else -> "Lavf/58.76.100"
+        }
+    }
+
+    val requestHeaders = remember(channel, compatMode, hdneaToken, userAgent) {
         val map = LinkedHashMap<String, String>()
-        channel.headers.forEach { (k, v) ->
-            if (!k.equals("User-Agent", ignoreCase = true)) {
-                map[k] = v
+        map["User-Agent"] = userAgent
+
+        if (compatMode != 2) {
+            channel.headers.forEach { (k, v) ->
+                if (v.isNotBlank() && !k.equals("User-Agent", ignoreCase = true)) {
+                    map[k] = v
+                }
             }
-        }
-        if (!hdneaToken.isNullOrBlank() &&
-            map.keys.none { it.equals("Cookie", ignoreCase = true) }
-        ) {
-            map["Cookie"] = hdneaToken
-        }
-        if (compatMode == 0 && channel.streamUrl.contains(".cdn.jio.com", ignoreCase = true)) {
-            if (map.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                map["Referer"] = "https://www.jiotv.com/"
+            if (!hdneaToken.isNullOrBlank() &&
+                map.keys.none { it.equals("Cookie", ignoreCase = true) }
+            ) {
+                map["Cookie"] = hdneaToken
             }
-            if (map.keys.none { it.equals("Origin", ignoreCase = true) }) {
-                map["Origin"] = "https://www.jiotv.com"
+            if (compatMode == 1 && channel.streamUrl.contains(".cdn.jio.com", ignoreCase = true)) {
+                if (map.keys.none { it.equals("Referer", ignoreCase = true) }) {
+                    map["Referer"] = "https://www.jiotv.com/"
+                }
+                if (map.keys.none { it.equals("Origin", ignoreCase = true) }) {
+                    map["Origin"] = "https://www.jiotv.com"
+                }
             }
         }
         map
     }
 
-    val userAgent = remember(channel) {
-        channel.headers.entries
-            .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
-            ?.value
-            ?.takeIf { it.isNotBlank() }
-            ?: "plaYtv/7.1.5 (Linux;Android 13) ExoPlayerLib/2.11.7"
-    }
-
     val finalStreamUrl = remember(channel, compatMode, hdneaToken) {
-        if (compatMode == 0 &&
+        if (compatMode == 1 &&
             !hdneaToken.isNullOrBlank() &&
             !channel.streamUrl.contains("__hdnea__=")
         ) {
@@ -414,8 +421,6 @@ fun PlayerScreen(
         errorHint = null
         isBuffering = true
 
-        // Start with a modest 1.2 Mbps initial estimate so mobile CDN HLS channels open instantly
-        // on the first segment and smoothly ramp up to 1080p within 2-3 seconds.
         val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
             .setInitialBitrateEstimate(1_200_000L)
             .setResetOnNetworkTypeChange(true)
@@ -424,12 +429,12 @@ fun PlayerScreen(
         val rawHttpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(userAgent)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(10_000)
-            .setReadTimeoutMs(12_000)
+            .setConnectTimeoutMs(12_000)
+            .setReadTimeoutMs(15_000)
             .setTransferListener(bandwidthMeter)
             .setDefaultRequestProperties(requestHeaders)
 
-        val dataSourceFactory: DataSource.Factory = if (compatMode == 0 && !hdneaToken.isNullOrBlank()) {
+        val dataSourceFactory: DataSource.Factory = if (compatMode == 1 && !hdneaToken.isNullOrBlank()) {
             DataSource.Factory { AuthTokenDataSource(rawHttpFactory.createDataSource(), hdneaToken) }
         } else {
             rawHttpFactory
@@ -483,7 +488,6 @@ fun PlayerScreen(
             }
             .build()
 
-        // Keep retry count fast (2) so mobile CDN glitches or compat fallbacks don't stall for 20+ seconds
         val loadErrorHandlingPolicy = DefaultLoadErrorHandlingPolicy(2)
 
         val mediaSource = when {
@@ -506,22 +510,20 @@ fun PlayerScreen(
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
 
-        // Live-window friendly buffer profile: instant 0.6s start + steady 6-25s live cushion
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                6_000,  // minBufferMs (fits cleanly inside mobile HLS live windows)
-                25_000, // maxBufferMs
-                600,    // bufferForPlaybackMs (fast first-frame start)
-                1_500   // bufferForPlaybackAfterRebufferMs
+                6_000,
+                25_000,
+                600,
+                1_500
             )
             .build()
 
-        // Fast-ramping ABR: starts immediately without stalling, climbs to HD quickly, drops early on dips
         val adaptiveTrackFactory = AdaptiveTrackSelection.Factory(
-            2_500, // minDurationForQualityIncreaseMs (fast upgrade to 1080p)
-            3_000, // maxDurationForQualityDecreaseMs
-            4_000, // minDurationToRetainAfterDiscardMs
-            0.75f  // bandwidthFraction
+            2_500,
+            3_000,
+            4_000,
+            0.75f
         )
         val trackSelector = DefaultTrackSelector(context, adaptiveTrackFactory).apply {
             setParameters(
@@ -588,8 +590,8 @@ fun PlayerScreen(
                             .firstOrNull()
                             ?.responseCode
 
-                        if (compatMode == 0 && (httpCode == 400 || httpCode == 403)) {
-                            compatMode = 1
+                        if (compatMode < 2 && (httpCode == 400 || httpCode == 403 || httpCode == null)) {
+                            compatMode += 1
                             return
                         }
 
@@ -601,7 +603,6 @@ fun PlayerScreen(
             }
     }
 
-    // Keep screen awake during live TV streaming
     DisposableEffect(activity) {
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
@@ -609,7 +610,6 @@ fun PlayerScreen(
         }
     }
 
-    // Pause when backgrounded (unless in Picture-in-Picture)
     DisposableEffect(lifecycleOwner, exoPlayer) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -634,7 +634,6 @@ fun PlayerScreen(
         }
     }
 
-    // Fullscreen system bars, display cutout edge-to-edge fill, & orientation management
     DisposableEffect(isLandscape) {
         resizeMode = if (isLandscape) {
             AspectRatioFrameLayout.RESIZE_MODE_FILL
@@ -668,7 +667,6 @@ fun PlayerScreen(
         onDispose { }
     }
 
-    // Release player and restore window chrome when leaving player
     DisposableEffect(exoPlayer) {
         onDispose {
             exoPlayer.release()
@@ -710,7 +708,6 @@ fun PlayerScreen(
             .background(DarkBackground)
             .then(if (!isLandscape && !isInPipMode) Modifier.statusBarsPadding() else Modifier)
     ) {
-        // Pinned 16:9 Video Stage (full-bleed in landscape / PiP)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -742,7 +739,6 @@ fun PlayerScreen(
                 }
             )
 
-            // Custom Sleek Compose Player Overlay + Glowing Buffering Indicator
             if (!isInPipMode) {
                 PlayerVideoOverlay(
                     channelName = channel.name,
@@ -811,7 +807,6 @@ fun PlayerScreen(
                 )
             }
 
-            // Playback Error Card Overlay
             errorHeadline?.let { headline ->
                 Column(
                     modifier = Modifier
@@ -890,7 +885,6 @@ fun PlayerScreen(
             }
         }
 
-        // Portrait Lower Content: Directly "More in Category" + 3-Column Grid
         if (!isLandscape && !isInPipMode && relatedChannels.isNotEmpty()) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
@@ -917,7 +911,6 @@ fun PlayerScreen(
         }
     }
 
-    // Quality & Audio Tracks Modal Bottom Sheet
     if (showTracksSheet) {
         TracksSelectionBottomSheet(
             videoOptions = videoOptions,
